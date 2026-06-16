@@ -70,7 +70,7 @@ tipo_producto, marca_detectada, marca_normalizada, variedad, volumen, formato, r
         try:
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=1000,
+                max_tokens=4096,
                 system=system,
                 messages=[{"role": "user", "content": user}]
             )
@@ -161,6 +161,12 @@ if "saved_names" not in st.session_state:
     st.session_state.saved_names = []
 if "processing_done" not in st.session_state:
     st.session_state.processing_done = False
+if "all_names" not in st.session_state:
+    st.session_state.all_names = []
+if "id_col" not in st.session_state:
+    st.session_state.id_col = None
+if "df" not in st.session_state:
+    st.session_state.df = None
 
 col_run, col_clear = st.columns([3, 1])
 with col_run:
@@ -170,6 +176,9 @@ with col_clear:
         st.session_state.saved_results = []
         st.session_state.saved_names = []
         st.session_state.processing_done = False
+        st.session_state.all_names = []
+        st.session_state.id_col = None
+        st.session_state.df = None
         st.rerun()
 
 if run_btn:
@@ -179,6 +188,11 @@ if run_btn:
     name_col = detect_name_col(df)
     id_col = next((c for c in df.columns if c.lower() == "id_distributor"), None)
     all_names = df[name_col].fillna("").astype(str).str.strip().tolist()
+
+    # Store metadata in session state for resilience
+    st.session_state.all_names = all_names
+    st.session_state.id_col = id_col
+    st.session_state.df = df
 
     # Resume from where we left off
     already_done = len(st.session_state.saved_results)
@@ -222,14 +236,9 @@ if run_btn:
 if st.session_state.saved_results:
     saved_count = len(st.session_state.saved_results)
 
-    # Rebuild df for output
-    if catalog_file:
-        df = pd.read_csv(catalog_file, dtype=str) if catalog_file.name.endswith(".csv") else pd.read_excel(catalog_file, dtype=str)
-        name_col = detect_name_col(df)
-        id_col = next((c for c in df.columns if c.lower() == "id_distributor"), None)
-    else:
-        df = None
-        id_col = None
+    # Use stored df from session state
+    df = st.session_state.get("df", None)
+    id_col = st.session_state.get("id_col", None)
 
     out_rows = []
     for i, (name, result) in enumerate(zip(st.session_state.saved_names, st.session_state.saved_results)):
