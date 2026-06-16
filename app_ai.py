@@ -8,16 +8,6 @@ import time
 
 st.set_page_config(page_title="Nexho Product Normalizer", page_icon="🍺", layout="centered")
 
-BRAND_ALIASES = {
-    "m*": "Mahou", "mao": "Mahou", "maho": "Mahou", "mh": "Mahou",
-    "sm": "San Miguel", "alh": "Alhambra", "alhamb": "Alhambra",
-    "cocacola": "Coca-Cola", "coca cola": "Coca-Cola", "cca": "Coca-Cola",
-    "sch": "Schweppes", "schwepps": "Schweppes",
-    "7up": "7Up", "7-up": "7Up",
-    "solan": "Solan de Cabras",
-    "j.w.": "Johnnie Walker", "jack daniel.": "Jack Daniels",
-}
-
 def load_brands_from_df(df):
     col = df.columns[0]
     brands = df[col].dropna().astype(str).str.strip().tolist()
@@ -38,7 +28,7 @@ def detect_name_col(df):
 
 def normalize_batch_claude(client, names, brand_list):
     brand_str = ", ".join(brand_list[:200])
-    
+
     system = f"""You are an expert product catalog normalizer for Nexho, a Spanish hospitality B2B marketplace owned by Mahou San Miguel.
 
 BRAND MASTER LIST (match and correct against these):
@@ -46,28 +36,27 @@ BRAND MASTER LIST (match and correct against these):
 
 NORMALIZATION RULES:
 - Volume: 1/3|tercio|33cl|0.33L→"33 cl" | 1/5|quinto|20cl|200cc→"20 cl" | 3/4|75cl|0.75L→"75 cl" | 1/2|50cl→"50 cl" | 1L|1litro→"1 l" | 70cl|0.7L→"70 cl" | 30L→"30 l" | 15L→"15 l" | 350cc|35cl→"35 cl" | 1200GR→"1.2 kg" | 5K|5KG→"5 kg"
-- Format: vidrio|botella|bot|RT→"Vidrio" | lata|latas|ltn→"Lata" | barril|keg→"Barril" | PET→"PET" | sobre|sobres|monodosis→"Monodosis" | brik→"Brik" | cubo→"Cubo" | barril→"Barril"
+- Format: vidrio|botella|bot|RT→"Vidrio" | lata|latas|ltn→"Lata" | barril|keg→"Barril" | PET→"PET" | sobre|sobres|monodosis→"Monodosis" | brik→"Brik" | cubo→"Cubo"
 - Retornabilidad: RET|ret|retornable|RT→"Retornable" | NR|N.R.|no ret→"No retornable" | not mentioned→null
-- Brand: fix abbreviations (MH→Mahou, SM→San Miguel, ALH→Alhambra, M*→Mahou, SCH→Schweppes, SOLAN→Solan de Cabras). Unknown brand→null+flag
+- Brand: fix abbreviations (MH→Mahou, SM→San Miguel, ALH→Alhambra, M*→Mahou, SCH→Schweppes, SOLAN→Solan de Cabras). Unknown→null+flag
 - tipo_producto: Cerveza|Agua|Agua con Gas|Vino Blanco|Vino Tinto|Vino Rosado|Cava|Refresco|Aceite|Limpieza|Snack|Lácteo|Licor|Whisky|Gin|Ron|Vodka|Tequila|Vermut|Café|Té|Infusión|Zumo|Brandy|Papel|Vajilla|Conserva|Condimento|Sirope|Otro
-- Encoding: ¡|¦|­ appearing in Spanish words → fix to Ñ (e.g. MU¡OZ→MUÑOZ)
+- Encoding: ¡|¦|­ in Spanish words → fix to Ñ (e.g. MU¡OZ→MUÑOZ)
 - Strip leading -, *, < from names
 - 1B|1BT|1BOTE = unit count, never volume
-- Ages (12 AÑOS, 3YO) go in variedad, not volume
+- Ages (12 AÑOS, 3YO) go in variedad not volume
 - Non-beverage missing brand is NORMAL — do not penalize
 
 CONFIDENCE (calculate per product):
-BEVERAGES: brand matched=+35pts | volume found=+25pts | tipo identified=+25pts | formato=+15pts → divide by 100
-NON-BEVERAGES: tipo identified=+40pts | volume/weight=+35pts | variedad=+25pts → divide by 100
+BEVERAGES: brand matched=+35 | volume=+25 | tipo=+25 | formato=+15 → divide by 100
+NON-BEVERAGES: tipo=+40 | volume/weight=+35 | variedad=+25 → divide by 100
 
 descripcion_normalizada: tipo + marca + variedad + volumen + formato + retornabilidad (skip nulls)
-Example: "Cerveza Mahou 5 Estrellas 33 cl Vidrio Retornable"
-For non-beverages without brand, still generate: "Limpieza Manual 5 l"
-Only null if tipo cannot be determined at all.
+Non-beverages without brand still generate: "Limpieza Manual 5 l"
+Only null if tipo cannot be determined.
 
-Flag requiere_revision_humana=true if: confidence<0.65 OR beverage with no brand OR completely ambiguous
+Flag requiere_revision_humana=true if confidence<0.65 OR beverage with no brand OR completely ambiguous.
 
-Return ONLY a valid JSON array, no markdown, no explanation. Each object must have exactly:
+Return ONLY a valid JSON array, no markdown. Each object must have exactly:
 tipo_producto, marca_detectada, marca_normalizada, variedad, volumen, formato, retornabilidad, descripcion_normalizada, confianza, requiere_revision_humana, avisos (string array)"""
 
     user = f"Normalize these {len(names)} product descriptions. Return exactly {len(names)} JSON objects in the same order.\n\n" + "\n".join(f"{i+1}. {n}" for i, n in enumerate(names))
@@ -106,13 +95,33 @@ def to_excel_bytes(df_main, df_review):
         df_review.to_excel(writer, index=False, sheet_name="Needs Review")
     return buf.getvalue()
 
+def build_output_row(name, result, df, i, id_col, dist_id):
+    row = {}
+    if id_col:
+        row["id_distributor"] = df[id_col].iloc[i]
+    elif dist_id:
+        row["id_distributor"] = dist_id
+    row["des_product_name"] = name
+    row["tipo_producto"] = result.get("tipo_producto") or ""
+    row["marca_detectada"] = result.get("marca_detectada") or ""
+    row["marca_normalizada"] = result.get("marca_normalizada") or ""
+    row["variedad"] = result.get("variedad") or ""
+    row["volumen"] = result.get("volumen") or ""
+    row["formato"] = result.get("formato") or ""
+    row["retornabilidad"] = result.get("retornabilidad") or ""
+    row["des_product_description_normalized"] = result.get("descripcion_normalizada") or ""
+    row["confianza"] = result.get("confianza", 0.3)
+    row["requiere_revision_humana"] = result.get("requiere_revision_humana", True)
+    row["avisos"] = "; ".join(result.get("avisos", [])) if result.get("avisos") else ""
+    return row
+
 # ── UI ──────────────────────────────────────────────────────────────────────
 
-st.title("🍺 Nexho Product Normalizer")
-st.markdown("**Mahou San Miguel** · AI-powered catalog normalization using Claude")
+st.title("🍺 Nexho Product Normalizer — AI")
+st.markdown("**Mahou San Miguel** · Powered by Claude · Intelligent catalog normalization")
 st.divider()
 
-# API Key
+# Step 1 - API Key
 st.subheader("Step 1 — Anthropic API Key")
 api_key = st.text_input("Enter your API key", type="password", placeholder="sk-ant-...")
 if api_key:
@@ -120,7 +129,7 @@ if api_key:
 
 st.divider()
 
-# Brand master
+# Step 2 - Brand master
 st.subheader("Step 2 — Upload brand master list")
 brands_file = st.file_uploader("Upload brands.xlsx", type=["xlsx","xls"], key="brands")
 brand_list = []
@@ -131,67 +140,104 @@ if brands_file:
 
 st.divider()
 
-# Catalog
+# Step 3 - Catalog
 st.subheader("Step 3 — Upload your product catalog")
 st.caption("Excel or CSV — any format. Auto-detects your product name column.")
 catalog_file = st.file_uploader("Upload catalog file", type=["xlsx","xls","csv"], key="catalog")
 dist_id = st.text_input("Your distributor ID (optional)", placeholder="e.g. 22")
-batch_size = st.slider("Batch size (products per API call)", min_value=5, max_value=25, value=15)
+batch_size = st.slider("Batch size (products per API call)", min_value=10, max_value=25, value=20,
+                       help="Larger = faster but may hit limits. 20 is recommended.")
 
 st.divider()
 
+# Step 4 - Run
 st.subheader("Step 4 — Normalize")
 
 ready = api_key and brands_file and catalog_file
 
-if st.button("▶ Run AI normalization", type="primary", disabled=not ready):
+if "saved_results" not in st.session_state:
+    st.session_state.saved_results = []
+if "saved_names" not in st.session_state:
+    st.session_state.saved_names = []
+if "processing_done" not in st.session_state:
+    st.session_state.processing_done = False
+
+col_run, col_clear = st.columns([3, 1])
+with col_run:
+    run_btn = st.button("▶ Run AI normalization", type="primary", disabled=not ready)
+with col_clear:
+    if st.button("↺ Reset", help="Clear saved progress and start fresh"):
+        st.session_state.saved_results = []
+        st.session_state.saved_names = []
+        st.session_state.processing_done = False
+        st.rerun()
+
+if run_btn:
     client = anthropic.Anthropic(api_key=api_key)
-    
+
     df = pd.read_csv(catalog_file, dtype=str) if catalog_file.name.endswith(".csv") else pd.read_excel(catalog_file, dtype=str)
     name_col = detect_name_col(df)
     id_col = next((c for c in df.columns if c.lower() == "id_distributor"), None)
-    names = df[name_col].fillna("").astype(str).str.strip().tolist()
+    all_names = df[name_col].fillna("").astype(str).str.strip().tolist()
 
-    progress = st.progress(0, text="Starting AI normalization...")
-    status = st.empty()
-    all_results = []
+    # Resume from where we left off
+    already_done = len(st.session_state.saved_results)
+    remaining_names = all_names[already_done:]
 
-    chunks = [names[i:i+batch_size] for i in range(0, len(names), batch_size)]
-    
-    for ci, chunk in enumerate(chunks):
-        pct = ci / len(chunks)
-        progress.progress(pct, text=f"Processing batch {ci+1} of {len(chunks)} ({ci*batch_size}/{len(names)} products)...")
-        results = normalize_batch_claude(client, chunk, brand_list)
-        all_results.extend(results)
-        if ci < len(chunks) - 1:
-            time.sleep(0.3)
+    if already_done > 0:
+        st.info(f"Resuming from product {already_done + 1} of {len(all_names)} ({already_done} already saved)")
 
-    progress.progress(1.0, text="Done!")
+    if not remaining_names:
+        st.success("All products already processed. Download below.")
+        st.session_state.processing_done = True
+    else:
+        chunks = [remaining_names[i:i+batch_size] for i in range(0, len(remaining_names), batch_size)]
+        total_chunks = len(all_names) // batch_size + 1
+
+        progress = st.progress(already_done / len(all_names), text=f"Starting... ({already_done}/{len(all_names)} done)")
+
+        error_box = st.empty()
+
+        for ci, chunk in enumerate(chunks):
+            global_done = already_done + ci * batch_size
+            pct = global_done / len(all_names)
+            progress.progress(min(pct, 1.0),
+                text=f"Processing batch {ci+1}/{len(chunks)} — {global_done}/{len(all_names)} products normalized")
+
+            try:
+                results = normalize_batch_claude(client, chunk, brand_list)
+                st.session_state.saved_results.extend(results)
+                st.session_state.saved_names.extend(chunk)
+            except Exception as e:
+                error_box.warning(f"⚠ Stopped at product {global_done} — {str(e)}\n\nYour progress is saved. Hit Run again to resume.")
+                break
+
+            time.sleep(0.2)
+
+        else:
+            progress.progress(1.0, text="Done!")
+            st.session_state.processing_done = True
+
+# Show results if we have any saved
+if st.session_state.saved_results:
+    saved_count = len(st.session_state.saved_results)
+
+    # Rebuild df for output
+    if catalog_file:
+        df = pd.read_csv(catalog_file, dtype=str) if catalog_file.name.endswith(".csv") else pd.read_excel(catalog_file, dtype=str)
+        name_col = detect_name_col(df)
+        id_col = next((c for c in df.columns if c.lower() == "id_distributor"), None)
+    else:
+        df = None
+        id_col = None
 
     out_rows = []
-    for i, (name, result) in enumerate(zip(names, all_results)):
-        row = {}
-        if id_col:
-            row["id_distributor"] = df[id_col].iloc[i]
-        elif dist_id:
-            row["id_distributor"] = dist_id
-        row["des_product_name"] = name
-        row["tipo_producto"] = result.get("tipo_producto") or ""
-        row["marca_detectada"] = result.get("marca_detectada") or ""
-        row["marca_normalizada"] = result.get("marca_normalizada") or ""
-        row["variedad"] = result.get("variedad") or ""
-        row["volumen"] = result.get("volumen") or ""
-        row["formato"] = result.get("formato") or ""
-        row["retornabilidad"] = result.get("retornabilidad") or ""
-        row["des_product_description_normalized"] = result.get("descripcion_normalizada") or ""
-        row["confianza"] = result.get("confianza", 0.3)
-        row["requiere_revision_humana"] = result.get("requiere_revision_humana", True)
-        row["avisos"] = "; ".join(result.get("avisos", [])) if result.get("avisos") else ""
-        out_rows.append(row)
+    for i, (name, result) in enumerate(zip(st.session_state.saved_names, st.session_state.saved_results)):
+        out_rows.append(build_output_row(name, result, df, i, id_col, dist_id))
 
     out_df = pd.DataFrame(out_rows)
     review_df = out_df[out_df["requiere_revision_humana"] == True].copy()
-    
+
     total = len(out_df)
     clean = (~out_df["requiere_revision_humana"]).sum()
     needs_review = out_df["requiere_revision_humana"].sum()
@@ -199,23 +245,32 @@ if st.button("▶ Run AI normalization", type="primary", disabled=not ready):
     branded = (out_df["marca_normalizada"] != "").sum()
 
     st.divider()
-    st.subheader("Results")
+
+    if st.session_state.processing_done:
+        st.subheader("✅ Results — Complete")
+    else:
+        st.subheader(f"⏸ Results — Partial ({saved_count} of {len(st.session_state.saved_names)} processed)")
+        st.caption("Hit **Run AI normalization** again to continue from where it stopped.")
+
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total", total)
+    col1.metric("Processed", total)
     col2.metric("Fully normalized", f"{clean} ({clean/total*100:.0f}%)")
     col3.metric("Needs review", f"{needs_review} ({needs_review/total*100:.0f}%)")
     col4.metric("Brands matched", f"{branded} ({branded/total*100:.0f}%)")
 
-    st.dataframe(out_df[["des_product_name","des_product_description_normalized","confianza","requiere_revision_humana"]].head(50), use_container_width=True)
+    st.dataframe(
+        out_df[["des_product_name","des_product_description_normalized","confianza","requiere_revision_humana"]].head(100),
+        use_container_width=True
+    )
 
     excel_bytes = to_excel_bytes(out_df, review_df)
     st.download_button(
-        label="⬇ Download Excel output",
+        label="⬇ Download Excel output (so far)",
         data=excel_bytes,
         file_name=f"nexho_normalized_{dist_id or 'output'}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    st.caption("Two sheets: **Normalized Catalog** (all) + **Needs Review** (flagged only)")
+    st.caption("Two sheets: **Normalized Catalog** (all processed) + **Needs Review** (flagged only)")
 
 elif not ready:
     missing = []
